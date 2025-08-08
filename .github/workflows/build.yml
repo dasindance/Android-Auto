@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'AutomatorFull.zip'
+      - 'AutomatorFull*.zip'
       - '.github/workflows/build.yml'
 
 jobs:
@@ -12,22 +12,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unzip project
-        run: unzip -o AutomatorFull.zip
+      - name: Pick ZIP and unzip
+        run: |
+          set -eux
+          ZIP=$(ls -1 AutomatorFull*.zip | head -n1)
+          echo "Using ZIP=$ZIP"
+          unzip -o "$ZIP" -d srcdir
 
       - name: Detect Gradle root
         run: |
           set -e
-          DIR=$(dirname $(find . -maxdepth 4 -name settings.gradle.kts -print -quit))
+          DIR=$(dirname $(find srcdir -maxdepth 4 -name settings.gradle.kts -print -quit))
           echo "BUILD_DIR=$DIR" >> $GITHUB_ENV
           echo "Detected BUILD_DIR=$DIR"
 
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
-
       - uses: android-actions/setup-android@v3
+      - name: Install SDK
+        run: sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - run: sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      # Patch the accessibility config inside the unzipped project
+      - name: Patch accessibility config
+        run: |
+          mkdir -p "${BUILD_DIR}/app/src/main/res/xml"
+          cat > "${BUILD_DIR}/app/src/main/res/xml/accessibility_service_config.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeAllMask"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:notificationTimeout="50"
+              android:canRetrieveWindowContent="true"
+              android:canPerformGestures="true"
+              android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagRequestEnhancedWebAccessibility|flagRequestFilterKeyEvents"
+              android:description="@string/accessibility_description" />
+          EOF
 
       - uses: gradle/gradle-build-action@v3
         with:
