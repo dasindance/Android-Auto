@@ -1,0 +1,68 @@
+name: Build Automator APK (auto)
+on:
+  push:
+    paths:
+      - 'AutomatorFull*.zip'
+      - '.github/workflows/build-automator2.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find ZIP
+        id: findzip
+        run: |
+          set -e
+          ZIP=$(ls -1 AutomatorFull*.zip 2>/dev/null | head -n1 || true)
+          if [ -z "$ZIP" ]; then echo "No AutomatorFull*.zip in repo root"; exit 1; fi
+          echo "zip=$ZIP" >> $GITHUB_OUTPUT
+          echo "Using ZIP=$ZIP"
+
+      - name: Detect Gradle folder in ZIP
+        id: detect
+        run: |
+          set -e
+          ZIP="${{ steps.findzip.outputs.zip }}"
+          GRADLE_FILE=$(unzip -Z -1 "$ZIP" | grep -E '(^|/)(settings\.gradle(\.kts)?)$' | head -n1 || true)
+          if [ -z "$GRADLE_FILE" ]; then unzip -l "$ZIP"; echo "No settings.gradle(.kts) found"; exit 1; fi
+          echo "inner_dir=$(dirname "$GRADLE_FILE")" >> $GITHUB_OUTPUT
+
+      - name: Unzip project
+        run: |
+          unzip -o "${{ steps.findzip.outputs.zip }}" -d srcdir
+          echo "BUILD_DIR=srcdir/${{ steps.detect.outputs.inner_dir }}" >> $GITHUB_ENV
+          echo "Using BUILD_DIR=$BUILD_DIR"
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Patch accessibility config
+        run: |
+          mkdir -p "${BUILD_DIR}/app/src/main/res/xml"
+          cat > "${BUILD_DIR}/app/src/main/res/xml/accessibility_service_config.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeAllMask"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:notificationTimeout="50"
+              android:canRetrieveWindowContent="true"
+              android:canPerformGestures="true"
+              android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagRequestEnhancedWebAccessibility|flagRequestFilterKeyEvents"
+              android:description="@string/accessibility_description" />
+          EOF
+
+      - uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.7
+          build-root-directory: ${{ env.BUILD_DIR }}
+          arguments: :app:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug.apk
+          path: ${{ env.BUILD_DIR }}/app/build/outputs/apk/debug/app-debug.apk
